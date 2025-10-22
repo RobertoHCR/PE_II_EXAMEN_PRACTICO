@@ -10,296 +10,165 @@ if (!isset($_SESSION['id_empresa_actual'])) {
     exit();
 }
 
+$pageStyles = ['css/modules.css']; 
 require_once 'includes/db_connection.php';
 require_once 'includes/header.php';
-
-$id_empresa_actual = $_SESSION['id_empresa_actual'];
-$id_usuario_actual = $_SESSION['id_usuario'];
-$mensaje = '';
-
-$criterios = [
-    1 => 'Crecimiento',
-    2 => 'Naturaleza de los competidores',
-    3 => 'Posibilidad capacidad productiva',
-    4 => 'Rentabilidad modis distributivos',
-    5 => 'Diferenciación del producto',
-    6 => 'Barreras de salida',
-    7 => 'Economías de escala',
-    8 => 'Necesidad de capital',
-    9 => 'Acceso a la tecnología',
-    10 => 'Reglamentos o leyes limitativos',
-    11 => 'Trámites burocráticos',
-    12 => 'Reacción esperada actuales competidores',
-    13 => 'Número de clientes',
-    14 => 'Posibilidad de integración ascendente',
-    15 => 'Rentabilidad de los clientes',
-    16 => 'Costo de cambio de proveedor para cliente',
-    17 => 'Disponibilidad de Productos Sustitutivos'
-];
-
-$valor_labels = [0 => 'Hostil', 1 => 'Nada', 2 => 'Poco', 3 => 'Medio', 4 => 'Alto', 5 => 'Muy Alto'];
-
-$labels_extremos = [
-    1 => ['Lento', 'Rápido'],
-    2 => ['Muchos', 'Pocos'],
-    3 => ['Sí', 'No'],
-    4 => ['Baja', 'Alta'],
-    5 => ['Escasa', 'Elevada'],
-    6 => ['Bajas', 'Altas'],
-    7 => ['No', 'Sí'],
-    8 => ['Bajas', 'Altas'],
-    9 => ['Fácil', 'Difícil'],
-    10 => ['No', 'Sí'],
-    11 => ['No', 'Sí'],
-    12 => ['Escasa', 'Enérgica'],
-    13 => ['Pocos', 'Muchos'],
-    14 => ['Pequeña', 'Grande'],
-    15 => ['Baja', 'Alta'],
-    16 => ['Bajo', 'Alto'],
-    17 => ['Grande', 'Pequeña']
-];
-
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $mysqli->begin_transaction();
-    try {
-        $stmt_porter = $mysqli->prepare("INSERT INTO porter_respuestas (id_empresa, criterio_id, valor) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE valor = VALUES(valor)");
-        foreach ($criterios as $id => $descripcion) {
-            if (isset($_POST['criterio_' . $id])) {
-                $valor = intval($_POST['criterio_' . $id]);
-                $stmt_porter->bind_param("iii", $id_empresa_actual, $id, $valor);
-                $stmt_porter->execute();
-            }
-        }
-        $stmt_porter->close();
-
-        $foda_items = [
-            'oportunidad' => [1 => $_POST['o1'] ?? '', 2 => $_POST['o2'] ?? ''],
-            'amenaza' => [1 => $_POST['a1'] ?? '', 2 => $_POST['a2'] ?? '']
-        ];
-        
-        $stmt_delete_foda = $mysqli->prepare("DELETE FROM foda WHERE id_empresa = ? AND id_usuario = ? AND origen = 'porter'");
-        $stmt_delete_foda->bind_param("ii", $id_empresa_actual, $id_usuario_actual);
-        $stmt_delete_foda->execute();
-        $stmt_delete_foda->close();
-
-        $stmt_foda = $mysqli->prepare("INSERT INTO foda (id_empresa, id_usuario, tipo, descripcion, origen, posicion) VALUES (?, ?, ?, ?, 'porter', ?)");
-        foreach ($foda_items as $tipo => $items) {
-            foreach ($items as $posicion => $descripcion) {
-                if (!empty(trim($descripcion))) {
-                    $stmt_foda->bind_param("iissi", $id_empresa_actual, $id_usuario_actual, $tipo, $descripcion, $posicion);
-                    $stmt_foda->execute();
-                }
-            }
-        }
-        $stmt_foda->close();
-
-        $mysqli->commit();
-        $mensaje = 'Análisis guardado correctamente.';
-    } catch (Exception $e) {
-        $mysqli->rollback();
-        $mensaje = 'Error al guardar el análisis: ' . $e->getMessage();
-    }
-}
-
-$respuestas_guardadas = [];
-$stmt_load = $mysqli->prepare("SELECT criterio_id, valor FROM porter_respuestas WHERE id_empresa = ?");
-$stmt_load->bind_param("i", $id_empresa_actual);
-$stmt_load->execute();
-$result = $stmt_load->get_result();
-while ($row = $result->fetch_assoc()) {
-    $respuestas_guardadas[$row['criterio_id']] = $row['valor'];
-}
-$stmt_load->close();
-
-$foda_guardado = ['o1' => '', 'o2' => '', 'a1' => '', 'a2' => ''];
-$stmt_foda_load = $mysqli->prepare("SELECT tipo, descripcion, posicion FROM foda WHERE id_empresa = ? AND id_usuario = ? AND origen = 'porter'");
-$stmt_foda_load->bind_param("ii", $id_empresa_actual, $id_usuario_actual);
-$stmt_foda_load->execute();
-$result_foda = $stmt_foda_load->get_result();
-while ($row = $result_foda->fetch_assoc()) {
-    if ($row['tipo'] == 'oportunidad' && $row['posicion'] == 1) $foda_guardado['o1'] = $row['descripcion'];
-    if ($row['tipo'] == 'oportunidad' && $row['posicion'] == 2) $foda_guardado['o2'] = $row['descripcion'];
-    if ($row['tipo'] == 'amenaza' && $row['posicion'] == 1) $foda_guardado['a1'] = $row['descripcion'];
-    if ($row['tipo'] == 'amenaza' && $row['posicion'] == 2) $foda_guardado['a2'] = $row['descripcion'];
-}
-$stmt_foda_load->close();
-
-$total_score = 0;
-foreach ($respuestas_guardadas as $valor) {
-    $total_score += $valor;
-}
-
-$conclusion = '';
-if ($total_score == 0 && count($respuestas_guardadas) < count($criterios)) {
-     $conclusion = 'Complete el análisis para ver la conclusión.';
-} else if ($total_score < 30) {
-    $conclusion = "Estamos en un mercado altamente competitivo, en el que es muy difícil hacerse un hueco en el mercado.";
-} else if ($total_score < 45) {
-    $conclusion = "El mercado presenta competitividad moderada con algunas oportunidades.";
-} else if ($total_score < 60) {
-    $conclusion = "La situación actual del mercado es favorable a la empresa.";
-} else {
-    $conclusion = "El mercado es altamente favorable y presenta excelentes oportunidades de crecimiento.";
-}
-
-$mysqli->close();
 ?>
 
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <title>Análisis Porter</title>
-</head>
-<body>
-    <div style="width: 90%; margin: 20px auto;">
-        <h1>8. ANÁLISIS PORTER</h1>
-        <p>A continuación marque con una X en las casillas que estime conveniente según el estado actual de su empresa. Valore su perfil competitivo en la escala Hostil-Favorable. Al finalizar lea la conclusión, para su caso particular, relativa al análisis del entorno próximo.</p>
-        
-        <?php if ($mensaje) echo "<p style='color: green; font-weight: bold;'>$mensaje</p>"; ?>
+<style>
+.porter-diagram {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    margin: 2.5rem 0;
+    font-family: Arial, sans-serif;
+}
 
-        <form action="porter_5fuerzas.php" method="POST">
-            <table border="1" style="width:100%; border-collapse: collapse; font-family: Arial, sans-serif; font-size: 0.9em;">
-                <thead style="background-color: #f0f0f0;">
-                    <tr>
-                        <th style="padding: 8px; width: 30%;">PERFIL COMPETITIVO</th>
-                        <th style="padding: 8px; width: 10%;">Hostil</th>
-                        <th style="padding: 8px;">Nada (0)</th>
-                        <th style="padding: 8px;">Poco (1)</th>
-                        <th style="padding: 8px;">Medio (2)</th>
-                        <th style="padding: 8px;">Alto (3)</th>
-                        <th style="padding: 8px;">Muy Alto (4)</th>
-                        <th style="padding: 8px;">Favorable (5)</th>
-                        <th style="padding: 8px; width: 10%;">Favorable</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr style="background-color: #e0e0e0;">
-                        <td colspan="9" style="padding: 8px; font-weight: bold;">Finalidad empresas del sector</td>
-                    </tr>
-                    <?php 
-                    $section1_ids = [1, 2, 3, 4, 5, 6];
-                    foreach ($section1_ids as $id): 
-                        $valor_guardado = $respuestas_guardadas[$id] ?? -1;
-                    ?>
-                    <tr>
-                        <td style="padding: 8px;"><?php echo $criterios[$id]; ?></td>
-                        <td style="padding: 8px; color: red; text-align: center;"><?php echo $labels_extremos[$id][0]; ?></td>
-                        <?php foreach ($valor_labels as $val_id => $label): ?>
-                        <td style="text-align:center; padding: 8px;">
-                            <input type="radio" name="criterio_<?php echo $id; ?>" value="<?php echo $val_id; ?>" <?php echo ($valor_guardado == $val_id) ? 'checked' : ''; ?> required>
-                        </td>
-                        <?php endforeach; ?>
-                        <td style="padding: 8px; color: blue; text-align: center;"><?php echo $labels_extremos[$id][1]; ?></td>
-                    </tr>
-                    <?php endforeach; ?>
+.porter-force {
+    border: 2px solid var(--brand-blue);
+    background-color: #f0f5fa;
+    color: var(--brand-dark);
+    padding: 0.75rem;
+    border-radius: 8px;
+    font-weight: 600;
+    text-align: center;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+    margin: 0.5rem;
+    position: relative;
+    z-index: 10;
+}
 
-                    <tr style="background-color: #e0e0e0;">
-                        <td colspan="9" style="padding: 8px; font-weight: bold;">Barreras de Entrada</td>
-                    </tr>
-                    <?php 
-                    $section2_ids = [7, 8, 9, 10, 11, 12];
-                    foreach ($section2_ids as $id): 
-                        $valor_guardado = $respuestas_guardadas[$id] ?? -1;
-                    ?>
-                    <tr>
-                        <td style="padding: 8px;"><?php echo $criterios[$id]; ?></td>
-                        <td style="padding: 8px; color: red; text-align: center;"><?php echo $labels_extremos[$id][0]; ?></td>
-                        <?php foreach ($valor_labels as $val_id => $label): ?>
-                        <td style="text-align:center; padding: 8px;">
-                            <input type="radio" name="criterio_<?php echo $id; ?>" value="<?php echo $val_id; ?>" <?php echo ($valor_guardado == $val_id) ? 'checked' : ''; ?> required>
-                        </td>
-                        <?php endforeach; ?>
-                        <td style="padding: 8px; color: blue; text-align: center;"><?php echo $labels_extremos[$id][1]; ?></td>
-                    </tr>
-                    <?php endforeach; ?>
-                    
-                    <tr style="background-color: #e0e0e0;">
-                        <td colspan="9" style="padding: 8px; font-weight: bold;">Poder de los Clientes</td>
-                    </tr>
-                    <?php 
-                    $section3_ids = [13, 14, 15, 16];
-                    foreach ($section3_ids as $id): 
-                        $valor_guardado = $respuestas_guardadas[$id] ?? -1;
-                    ?>
-                    <tr>
-                        <td style="padding: 8px;"><?php echo $criterios[$id]; ?></td>
-                        <td style="padding: 8px; color: red; text-align: center;"><?php echo $labels_extremos[$id][0]; ?></td>
-                        <?php foreach ($valor_labels as $val_id => $label): ?>
-                        <td style="text-align:center; padding: 8px;">
-                            <input type="radio" name="criterio_<?php echo $id; ?>" value="<?php echo $val_id; ?>" <?php echo ($valor_guardado == $val_id) ? 'checked' : ''; ?> required>
-                        </td>
-                        <?php endforeach; ?>
-                        <td style="padding: 8px; color: blue; text-align: center;"><?php echo $labels_extremos[$id][1]; ?></td>
-                    </tr>
-                    <?php endforeach; ?>
-                    
-                    <tr style="background-color: #e0e0e0;">
-                        <td colspan="9" style="padding: 8px; font-weight: bold;">Productos sustitutivos</td>
-                    </tr>
-                    <?php 
-                    $section4_ids = [17];
-                    foreach ($section4_ids as $id): 
-                        $valor_guardado = $respuestas_guardadas[$id] ?? -1;
-                    ?>
-                    <tr>
-                        <td style="padding: 8px;"><?php echo $criterios[$id]; ?></td>
-                        <td style="padding: 8px; color: red; text-align: center;"><?php echo $labels_extremos[$id][0]; ?></td>
-                        <?php foreach ($valor_labels as $val_id => $label): ?>
-                        <td style="text-align:center; padding: 8px;">
-                            <input type="radio" name="criterio_<?php echo $id; ?>" value="<?php echo $val_id; ?>" <?php echo ($valor_guardado == $val_id) ? 'checked' : ''; ?> required>
-                        </td>
-                        <?php endforeach; ?>
-                        <td style="padding: 8px; color: blue; text-align: center;"><?php echo $labels_extremos[$id][1]; ?></td>
-                    </tr>
-                    <?php endforeach; ?>
-                </tbody>
-            </table>
+.porter-force-top,
+.porter-force-bottom {
+    width: 60%;
+}
 
-            <div style="margin-top: 20px; border: 1px solid black; padding: 10px; background-color: #f9f9f9;">
-                <h3 style="margin: 0 0 10px 0;">CONCLUSIÓN</h3>
-                <p style="font-size: 1.1em; font-weight: bold; margin: 0 0 10px 0;"><?php echo $conclusion; ?></p>
-                <div style="font-size: 1.2em; font-weight: bold; color: #005a9e; text-align: right;">
-                    Total: <?php echo $total_score; ?>
+.porter-middle-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+}
+
+.porter-center {
+    background: var(--brand-blue);
+    color: white;
+    padding: 1.5rem;
+    border-radius: 8px;
+    text-align: center;
+    flex-grow: 1;
+    margin: 0 1rem;
+    box-shadow: 0 6px 15px rgba(0,0,0,0.1);
+    z-index: 5;
+    border: 2px solid var(--brand-dark);
+}
+
+.porter-force-side {
+    width: 25%;
+}
+
+.porter-arrow {
+    font-size: 2.5rem;
+    color: var(--brand-green);
+    font-weight: bold;
+    z-index: 1;
+}
+
+.porter-arrow-v {
+    margin: -10px 0;
+}
+.porter-arrow-h {
+    margin: 0 -10px;
+}
+
+.porter-explanation {
+    margin-top: 2rem;
+}
+.porter-explanation h5 {
+    color: var(--brand-blue);
+    font-weight: 700;
+    border-bottom: 2px solid var(--brand-green);
+    padding-bottom: 5px;
+    margin-top: 1.5rem;
+}
+.porter-explanation ul {
+    list-style-type: disc;
+    padding-left: 20px;
+}
+.porter-explanation li {
+    margin-bottom: 0.5rem;
+}
+</style>
+
+<div class="container mt-4">
+    <div class="module-container">
+        <div class="module-header">
+            <h2 class="module-title">8. ANÁLISIS EXTERNO MICROENTORNO: MATRIZ DE PORTER</h2>
+        </div>
+
+        <div class="module-content">
+            <div class="explanation-box p-4 mb-5">
+
+                <p>El Modelo de las 5 Fuerzas de Porter estudia un determinado negocio en función de la amenaza de nuevos competidores y productos sustitutivos, así como el poder de negociación de los proveedores y clientes, teniendo en cuenta el grado de competencia del sector.</p>
+                <p>Esto proporciona una clara imagen de la situación competitiva de un mercado en concreto. El conjunto de las cinco fuerzas determina la intensidad competitiva, la rentabilidad del sector y, de forma derivada, las posibilidades futuras de éste.</p>
+
+                <div class="porter-diagram">
+                    <div class="porter-force porter-force-top">
+                        1. Amenaza de entrada de nuevos competidores
+                    </div>
+                    <div class="porter-arrow porter-arrow-v">↓</div>
+                    <div class="porter-middle-row">
+                        <div class="porter-force porter-force-side">
+                            4. Poder de negociación de proveedores
+                        </div>
+                        <div class="porter-arrow porter-arrow-h">→</div>
+                        <div class="porter-center">
+                            <h5>2. Rivalidad entre las Empresas del sector</h5>
+                        </div>
+                        <div class="porter-arrow porter-arrow-h">←</div>
+                        <div class="porter-force porter-force-side">
+                            5. Poder de negociación de clientes
+                        </div>
+                    </div>
+                    <div class="porter-arrow porter-arrow-v">↑</div>
+                    <div class="porter-force porter-force-bottom">
+                        3. Amenaza de llegada de nuevos productos sustitutivos
+                    </div>
                 </div>
+
+                <div class="porter-explanation">
+                    <h5>1. Amenaza de nuevos entrantes</h5>
+                    <p>La aparición de nuevas empresas en el sector supone un incremento de recursos, de capacidad y, en fin, un intento de obtener una participación en el mercado a costa de otros que ya la tenían. La posibilidad de entrar en un sector depende fundamentalmente de dos factores: la capacidad de reacción de las empresas que ya están (tecnológica, financiera, productiva, etc.) y las denominadas barreras de entrada (obstáculos para el ingreso).</p>
+                    
+                    <h5>2. Rivalidad de los competidores</h5>
+                    <p>La rivalidad aparece cuando uno o varios competidores sienten la presión o ven la oportunidad de mejorar. El grado de rivalidad depende de una serie de factores estructurales, entre los que podemos destacar: gran número de competidores, crecimiento lento en el mercado, costes fijos altos, baja diferenciación de productos, intereses estratégicos y barreras de salida.</p>
+
+                    <h5>3. Presión de los productos sustitutivos</h5>
+                    <p>El nivel de precio/calidad de los productos sustitutivos limita el nivel de precios de la industria. Los productos sustitutivos pueden ser fabricados por empresas pertenecientes o ajenas al sector (situación peligrosa). Se debe prestar mucha atención a los "sustitutivos no evidentes" (ejemplo, videoconferencia contra hotel más avión).</p>
+
+                    <h5>4. Poder de negociación de los proveedores</h5>
+                    <p>Los proveedores poderosos pueden amenazar con subir los precios y/o disminuir la calidad. Su poder aumenta si: está más concentrado que el sector que compra, no están obligados a competir con sustitutivos, el comprador no es cliente importante, el producto es importante para el comprador, el producto está diferenciado o representan una amenaza de integración.</p>
+
+                    <h5>5. Poder de negociación de los compradores/clientes</h5>
+                    <p>Los compradores fuerzan los precios a la baja y la calidad al alza, en perjuicio del beneficio de la industria. Su poder aumenta si: están concentrados (compran grandes volúmenes), el coste de la materia prima es importante, los productos no son diferenciados, el coste de cambio de proveedor es pequeño o tienen información total.</p>
+                </div>
+
+                <hr>
+                <p class="text-center fst-italic mt-4">Según Porter, estas fuerzas se encuentran en interacción y cambio permanente. Nuestro objetivo será situar a nuestra empresa en una posición en la que se pueda defender de las amenazas que las fuerzas competitivas plantean.</p>
+
             </div>
 
-            <p style="font-size: 0.9em; color: #555; margin-top: 15px;">Una vez analizado el entorno próximo de su empresa, es decir, análisis externo de su microentorno, identifique las oportunidades y amenazas más relevantes que desee que se reflejen en el análisis</p>
-
-            <table border="1" style="width:100%; border-collapse: collapse; margin-top: 10px;">
-                <tr style="background-color: #ffe0b2;">
-                    <th style="padding: 8px;">OPORTUNIDADES</th>
-                </tr>
-                <tr>
-                    <td style="padding: 8px;">O1: <input type="text" name="o1" value="<?php echo htmlspecialchars($foda_guardado['o1']); ?>" style="width: 95%;"></td>
-                </tr>
-                <tr>
-                    <td style="padding: 8px;">O2: <input type="text" name="o2" value="<?php echo htmlspecialchars($foda_guardado['o2']); ?>" style="width: 95%;"></td>
-                </tr>
-            </table>
-
-            <table border="1" style="width:100%; border-collapse: collapse; margin-top: 10px;">
-                <tr style="background-color: #e3f2fd;">
-                    <th style="padding: 8px;">AMENAZAS</th>
-                </tr>
-                <tr>
-                    <td style="padding: 8px;">A1: <input type="text" name="a1" value="<?php echo htmlspecialchars($foda_guardado['a1']); ?>" style="width: 95%;"></td>
-                </tr>
-                <tr>
-                    <td style="padding: 8px;">A2: <input type="text" name="a2" value="<?php echo htmlspecialchars($foda_guardado['a2']); ?>" style="width: 95%;"></td>
-                </tr>
-            </table>
-
-            <div style="margin-top: 20px;">
-                <button type="submit" style="padding: 10px 20px; font-size: 1em; background-color: #007bff; color: white; border: none; cursor: pointer;">Guardar Análisis</button>
+            <div class="d-flex justify-content-between mt-4">
+                <a href="matriz_bcg.php" class="btn btn-nav">&laquo; Anterior: Matriz BCG</a>
+                <a href="dashboard.php" class="btn btn-nav-outline">Volver al Índice</a>
+                <a href="autodiagnostico_porter.php" class="btn btn-save">Siguiente: Autodiagnóstico Porter &raquo;</a>
             </div>
-        </form>
-
-        <div style="margin-top: 20px; display: flex; justify-content: space-between;">
-            <a href="matriz_bcg.php" style="padding: 8px 15px; background-color: #6c757d; color: white; text-decoration: none;">&laquo; Anterior: Matriz BCG</a>
-            <a href="dashboard.php" style="padding: 8px 15px; background-color: #f0f0f0; color: #333; border: 1px solid #ccc; text-decoration: none;">Volver al Índice</a>
-            <a href="analisis_pest.php" style="padding: 8px 15px; background-color: #28a745; color: white; text-decoration: none;">Siguiente: PEST &raquo;</a>
         </div>
     </div>
-</body>
-</html>
+</div>
+
+<?php
+require_once 'includes/footer.php';
+$mysqli->close();
+?>
